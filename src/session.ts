@@ -5,6 +5,7 @@ import {
   logAuthorizeUrl,
   type LinkOptions,
 } from "./link.js";
+import type { ElicitationBroker } from "./elicitation.js";
 import { connectMcp, type McpSession } from "./mcp.js";
 
 export interface McpSessionManagerOptions {
@@ -15,6 +16,8 @@ export interface McpSessionManagerOptions {
   link?: Omit<LinkOptions, "mcpUrl">;
   /** Advertise MCP Apps (`ui://` views) support to the server. Default true; false tests a server's text fallback. */
   ui?: boolean;
+  /** Advertise elicitation and let the person answer confirmations (SIM_ELICITATION=voice). Off by default. */
+  elicitation?: ElicitationBroker;
 }
 
 /** Where account linking stands, for a UI that shouldn't have to wait on the human. */
@@ -64,7 +67,7 @@ export class McpSessionManager {
   async ensureSession(): Promise<McpSession> {
     if (this.session) return this.session;
     const token = await this.accessToken();
-    this.session = await connectMcp(this.options.mcpUrl, token, { ui: this.options.ui });
+    this.session = await connectMcp(this.options.mcpUrl, token, { ui: this.options.ui, elicitation: this.options.elicitation });
     return this.session;
   }
 

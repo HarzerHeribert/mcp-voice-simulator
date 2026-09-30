@@ -29,6 +29,10 @@
   .hint { color: var(--muted); font-size: 3cqw; }
   .confirm { margin-top: 3cqw; display: none; gap: 2cqw; }
   .screen[data-confirm="true"] .confirm { display: flex; }
+  /* A question the server asked through elicitation (SIM_ELICITATION=voice): the person answers it here. */
+  .ask { margin-top: 3cqw; display: none; gap: 2cqw; }
+  .screen[data-asking="true"] .ask { display: flex; }
+  .screen[data-asking="true"] .confirm { display: none; }
 
   /* An MCP Apps view, when the last turn produced one: it fills the screen, and the reply becomes a caption. */
   .view { display: none; position: absolute; left: 0; right: 0; top: 0; bottom: 0; z-index: 1; }
@@ -84,6 +88,10 @@
         <div class="confirm">
           <button class="primary" data-say="Confirm">Confirm</button>
           <button data-say="Cancel">Cancel</button>
+        </div>
+        <div class="ask">
+          <button class="primary" data-answer="accept">Yes</button>
+          <button data-answer="decline">No</button>
         </div>
         <div class="ring"></div>
         <div class="view" id="view"></div>
@@ -241,12 +249,50 @@ function speak(text) {
   speaker.speak(text);
 }
 
+const ANSWERED = { accept: "yes", decline: "no", cancel: "cancelled" };
+const WHY = { "not-a-confirmation": "a form a voice host can't show, declined without asking", "url-mode": "URL mode, declined without asking", timeout: "no answer in time" };
+
 function callDetails(t) {
   const tag = t.origin === "view" ? " <span class=\"ms\">from view</span>" : "";
   const view = t.ui ? " 🖼" : "";
-  return `<details><summary class="${t.isError ? "error" : ""}">${esc(t.tool)}${view}${tag} <span class="ms">${t.ms} ms</span></summary>` +
-    `<pre>${esc(JSON.stringify(t.args))}\n→ ${esc(t.text)}</pre></details>`;
+  const asked = (t.elicitations ?? []).map((e) => `\nasked: “${esc(e.message)}” → ${ANSWERED[e.action]}${e.reason ? ` (${WHY[e.reason]})` : ""}`).join("");
+  return `<details><summary class="${t.isError ? "error" : ""}">${esc(t.tool)}${view}${tag}${t.elicitations?.length ? " ❓" : ""} <span class="ms">${t.ms} ms</span></summary>` +
+    `<pre>${esc(JSON.stringify(t.args))}${asked}\n→ ${esc(t.text)}</pre></details>`;
 }
+
+// ---- Elicitation (SIM_ELICITATION=voice): while a turn runs, the server may ask the person a
+// yes/no question. It is spoken and shown on the screen; nothing is answered on their behalf.
+let asking = null;
+function watchElicitation() {
+  let stopped = false;
+  (async function tick() {
+    if (stopped) return;
+    try {
+      const { pending } = await (await fetch("/api/elicitation")).json();
+      if (pending && pending.id !== asking?.id) {
+        asking = pending;
+        $("reply").textContent = pending.message;
+        screen.dataset.asking = "true";
+        speak(pending.message);
+      } else if (!pending && asking) {
+        asking = null;
+        screen.dataset.asking = "false";
+      }
+    } catch { /* the turn's own request reports errors */ }
+    if (!stopped) setTimeout(tick, 400);
+  })();
+  return () => { stopped = true; asking = null; screen.dataset.asking = "false"; };
+}
+
+document.addEventListener("click", async (e) => {
+  const action = e.target.closest("[data-answer]")?.dataset.answer;
+  if (!action || !asking) return;
+  const { id } = asking;
+  asking = null;
+  screen.dataset.asking = "false";
+  $("reply").textContent = "…";
+  await fetch("/api/elicitation", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id, action }) });
+});
 
 function appendLog(html) {
   const el = document.createElement("div");
@@ -319,6 +365,7 @@ async function say(utterance, opts = {}) {
   busy = true; send.disabled = true;
   $("heard").textContent = `“${utterance}”`;
   setState("thinking");
+  const stopAsking = watchElicitation();
   try {
     const res = await fetch("/api/turn", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ utterance }) });
     const data = await res.json();
@@ -334,6 +381,7 @@ async function say(utterance, opts = {}) {
     screen.dataset.confirm = "false";
     await clearView();
   } finally {
+    stopAsking();
     busy = false; send.disabled = false; setState("idle");
     input.value = "";
     loadStatus();

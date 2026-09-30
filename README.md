@@ -88,6 +88,7 @@ bearer token and want to skip account linking entirely, set
 | `SIM_PORT` | default `8790` |
 | `SIM_LINK_TIMEOUT_MS` | how long to wait for you to finish logging in, in milliseconds (default `300000`, 5 minutes). Servers that make you connect several providers on first use can need every minute of it |
 | `SIM_UI`, `SIM_SANDBOX_PORT` | MCP Apps views, see [On-screen views](#on-screen-views-mcp-apps) |
+| `SIM_ELICITATION`, `SIM_ELICITATION_TIMEOUT_MS` | spoken confirmations, see [Confirmations](#confirmations-elicitation) |
 | `SIM_TTS` and `ELEVENLABS_*` | optional server-side voice, see [Voice](#voice-text-to-speech) |
 | `SIM_BRAIN` | force `claude` or `cursor` (default: cursor if `CURSOR_API_KEY` is set, else claude) |
 | `ANTHROPIC_API_KEY`, `SIM_MODEL` | for the Claude brain (`SIM_MODEL` default `claude-sonnet-5`) |
@@ -112,6 +113,34 @@ MCP servers can return a screen next to their spoken reply: a tool declares `_me
 **What this is and isn't.** It implements the MCP Apps *spec* host. It does not model Alexa's own webview: the Alexa docs only say a view renders "in the conversation view", so what Alexa+ enforces beyond the spec is unknown to us. The screen-shape picker under the device is for trying a view at different sizes, not a claim about any real device.
 
 **Brain support.** With the Claude brain the simulator makes the tool calls and has the full result, so views work. The Cursor brain makes tool calls itself and doesn't hand back the full result; the simulator will not re-call a tool to get it (a mutating tool would repeat its side effects), so with Cursor it shows a note that the view can't be shown.
+
+## Confirmations (elicitation)
+
+A server that is about to do something consequential — place an order, spend money — can ask
+the person first with MCP [elicitation](https://modelcontextprotocol.io/specification/2025-11-25/client/elicitation):
+the host shows the question, the person answers, and the model never sees or supplies the yes.
+Whether Alexa+ supports it is not documented, and Amazon's example client declares no
+elicitation, so it is **off by default** and a server should fail closed without it. Opt in to
+try the other path:
+
+- **Advertises form elicitation** (`capabilities.elicitation.form`) when it connects.
+- **Speaks the question** and shows Yes / No on the device screen while the turn runs; your
+  answer goes back to the server. The trace log shows every question and its answer (❓).
+- **Handles only what a voice host can:** a confirmation, i.e. a form with no fields or a single
+  boolean field. Any other form, and URL mode, is **declined without asking** (a speaker can't
+  render a form); no answer within the timeout is **cancel**. Nothing is ever accepted on your
+  behalf.
+- Works for both protocol eras: 2025-11-25 servers ask mid-call; on 2026-07-28 the client answers
+  `input_required` rounds through the same handler.
+
+| Env var | Purpose |
+| --- | --- |
+| `SIM_ELICITATION` | `off` (default) or `voice` |
+| `SIM_ELICITATION_TIMEOUT_MS` | how long to wait for your answer before cancelling (default `60000`) |
+
+**Brain support.** With the Claude brain the simulator's client makes the tool calls, so the
+server's question reaches you. The Cursor brain calls tools through its own MCP client, which
+this setting doesn't reach.
 
 ## Voice (text-to-speech)
 
@@ -223,7 +252,9 @@ public/index.html   Browser UI: device-styled screen, mic (SpeechRecognition),
                      spoken replies, tool-call trace log
 public/tts.js         The page's voice: browser speechSynthesis, or /api/tts audio
 public/host.js        GENERATED browser MCP Apps host (AppBridge); source in host/
-src/server.ts        HTTP API: /api/status, /api/relink, /api/turn, /api/reset, /api/tts, /api/ui/tool-call
+src/server.ts        HTTP API: /api/status, /api/relink, /api/turn, /api/reset, /api/tts, /api/ui/tool-call,
+                     /api/elicitation
+src/elicitation.ts   Elicitation as a spoken yes/no, fail closed (SIM_ELICITATION=voice)
 src/tts/              Text-to-speech providers (ElevenLabs), cache, route
 src/ui/               MCP Apps: view resolution, CSP, sandbox proxy server, routes
 host/                 Browser host source (bundled to public/host.js by scripts/build-host.mjs)

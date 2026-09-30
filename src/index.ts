@@ -17,6 +17,14 @@ export {
   type ToolCallTrace,
 } from "./mcp.js";
 export { McpSessionManager, type LinkStatus, type McpSessionManagerOptions } from "./session.js";
+export {
+  DEFAULT_ELICITATION_TIMEOUT_MS,
+  ElicitationBroker,
+  confirmationField,
+  type ElicitationAction,
+  type ElicitationRecord,
+  type PendingElicitation,
+} from "./elicitation.js";
 export type { Brain, BrainTurnResult } from "./brains/types.js";
 export { createClaudeBrain, type ClaudeBrainOptions } from "./brains/claude.js";
 export { createCursorBrain, type CursorBrainOptions } from "./brains/cursor.js";

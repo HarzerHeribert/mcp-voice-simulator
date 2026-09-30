@@ -2,6 +2,7 @@
 import { createClaudeBrain } from "./brains/claude.js";
 import { createCursorBrain } from "./brains/cursor.js";
 import type { Brain } from "./brains/types.js";
+import { DEFAULT_ELICITATION_TIMEOUT_MS, ElicitationBroker } from "./elicitation.js";
 import { createServer } from "./server.js";
 import { McpSessionManager } from "./session.js";
 import { ttsConfigFromEnv, type TtsConfig } from "./tts/config.js";
@@ -32,6 +33,15 @@ if (sandboxPort !== undefined && (!Number.isInteger(sandboxPort) || sandboxPort 
   fail(`SIM_SANDBOX_PORT must be a port number (got "${sandboxPortRaw}").`);
 }
 
+const simElicitation = (env("SIM_ELICITATION") ?? "off").toLowerCase();
+if (simElicitation !== "off" && simElicitation !== "voice") fail(`SIM_ELICITATION must be "off" or "voice" (got "${simElicitation}").`);
+const elicitationTimeoutRaw = env("SIM_ELICITATION_TIMEOUT_MS");
+const elicitationTimeoutMs = elicitationTimeoutRaw === undefined ? DEFAULT_ELICITATION_TIMEOUT_MS : Number(elicitationTimeoutRaw);
+if (!Number.isInteger(elicitationTimeoutMs) || elicitationTimeoutMs <= 0 || elicitationTimeoutMs > 2_147_483_647) {
+  fail(`SIM_ELICITATION_TIMEOUT_MS must be a number of milliseconds (got "${elicitationTimeoutRaw}").`);
+}
+const elicitation = simElicitation === "voice" ? new ElicitationBroker(elicitationTimeoutMs) : undefined;
+
 // First-time linking can take a while (consent screens for each connected provider), so longer than the library's 2 minutes.
 const DEFAULT_LINK_TIMEOUT_MS = 300_000;
 const MAX_TIMER_MS = 2_147_483_647; // setTimeout's limit; anything larger fires immediately
@@ -46,6 +56,7 @@ const sessionManager = new McpSessionManager({
   bearerToken: env("MCP_BEARER_TOKEN"),
   link: { clientId: env("MCP_CLIENT_ID"), timeoutMs: linkTimeoutMs },
   ui: uiEnabled,
+  elicitation,
 });
 
 function pickBrainName(): "claude" | "cursor" {
@@ -89,10 +100,12 @@ createServer({
   ttsMaxChars: tts.maxChars,
   ttsCacheEntries: tts.cacheEntries,
   ui: uiEnabled ? { sandboxPort } : false,
+  elicitation,
 });
 console.log(`mcp-voice-simulator: http://127.0.0.1:${port}`);
 console.log(`  MCP server: ${mcpUrl}`);
 console.log(`  Brain: ${brainName}`);
 console.log(`  Voice: ${tts.provider?.name ?? "browser"}`);
 console.log(`  Views (MCP Apps): ${uiEnabled ? "on" : "off"}`);
+console.log(`  Elicitation: ${elicitation ? "voice (confirmations are spoken; you answer in the page)" : "off"}`);
 if (tts.hint) console.log(`  Note: ${tts.hint}`);

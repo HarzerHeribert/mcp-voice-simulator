@@ -1,6 +1,6 @@
 /**
  * HTTP server: a tiny API (`/api/status`, `/api/relink`, `/api/turn`, `/api/reset`,
- * `/api/tts`, `/api/ui/tool-call`) plus the static browser UI in public/, wired to a Brain
+ * `/api/tts`, `/api/ui/tool-call`, `/api/elicitation`) plus the static browser UI in public/, wired to a Brain
  * and an McpSessionManager. With MCP Apps view support on, it also runs the
  * sandbox proxy on a second port (see ui/sandbox.ts).
  */
@@ -10,6 +10,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { Brain } from "./brains/types.js";
+import type { ElicitationAction, ElicitationBroker } from "./elicitation.js";
 import { HTML_SECURITY_HEADERS, guardRequest } from "./security.js";
 import type { McpSessionManager } from "./session.js";
 import { createTtsRoute } from "./tts/route.js";
@@ -37,6 +38,11 @@ export interface CreateServerOptions {
    * sandbox to have different origins.
    */
   ui?: boolean | { sandboxPort?: number };
+  /**
+   * The broker the session manager answers elicitations through (SIM_ELICITATION=voice). The page
+   * polls `GET /api/elicitation` while a turn runs and answers with `POST /api/elicitation`.
+   */
+  elicitation?: ElicitationBroker;
 }
 
 function json(res: http.ServerResponse, status: number, body: unknown): void {
@@ -113,6 +119,7 @@ export function createServer(options: CreateServerOptions): http.Server {
           brain: options.brain.name,
           tts: { name: tts.name },
           ui: ui.status(),
+          elicitation: options.elicitation ? "voice" : "off",
         };
         // Doesn't wait for the human to finish logging in, so the page can show the link meanwhile.
         const link = await options.sessionManager.linkStatus();
@@ -177,6 +184,20 @@ export function createServer(options: CreateServerOptions): http.Server {
           awaitingConfirm: lastAwaitingConfirm,
           ...(await ui.forTurn(trace)),
         });
+      }
+
+      if (req.method === "GET" && path === "/api/elicitation") {
+        return json(res, 200, { pending: options.elicitation?.current() ?? null });
+      }
+
+      if (req.method === "POST" && path === "/api/elicitation") {
+        const body = (await readJsonBody(req)) as { id?: unknown; action?: unknown };
+        const actions: ElicitationAction[] = ["accept", "decline", "cancel"];
+        if (typeof body.id !== "string" || !actions.includes(body.action as ElicitationAction)) {
+          throw new HttpError(400, "id and action (accept, decline or cancel) are required");
+        }
+        const ok = options.elicitation?.answer(body.id, body.action as ElicitationAction) ?? false;
+        return json(res, ok ? 200 : 404, ok ? { ok } : { error: "no such question (answered or timed out)" });
       }
 
       if (req.method === "POST" && path === "/api/tts") {

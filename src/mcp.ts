@@ -5,6 +5,7 @@
  */
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 
+import type { ElicitationBroker, ElicitationParams, ElicitationRecord } from "./elicitation.js";
 import { UI_EXTENSION_ID, UI_MIME_TYPE, uiResourceUri } from "./ui/meta.js";
 
 export interface McpTool {
@@ -22,11 +23,18 @@ export interface McpSession {
   tools: McpTool[];
   /** Whether this session advertised MCP Apps support to the server. */
   ui: boolean;
+  /** Set when this session advertised elicitation: questions go to the person through it. */
+  elicitation?: ElicitationBroker;
 }
 
 export interface ConnectOptions {
   /** Advertise MCP Apps (`ui://` views) support. Default true. Off tests a server's text fallback. */
   ui?: boolean;
+  /**
+   * Advertise form elicitation and answer it as a spoken confirmation (see elicitation.ts).
+   * Off by default, like a host that cannot render forms: the server must then fail closed.
+   */
+  elicitation?: ElicitationBroker;
 }
 
 export async function connectMcp(
@@ -35,17 +43,23 @@ export async function connectMcp(
   options: ConnectOptions = {},
 ): Promise<McpSession> {
   const ui = options.ui !== false;
+  const capabilities = {
+    ...(ui ? { extensions: { [UI_EXTENSION_ID]: { mimeTypes: [UI_MIME_TYPE] } } } : {}),
+    ...(options.elicitation ? { elicitation: { form: {} } } : {}),
+  };
   const client = new Client(
     { name: "mcp-voice-simulator", version: "0.1.0" },
-    ui ? { capabilities: { extensions: { [UI_EXTENSION_ID]: { mimeTypes: [UI_MIME_TYPE] } } } } : undefined,
+    Object.keys(capabilities).length ? { capabilities } : undefined,
   );
+  const broker = options.elicitation;
+  if (broker) client.setRequestHandler("elicitation/create", async (request) => broker.handle(request.params as ElicitationParams));
   await client.connect(
     new StreamableHTTPClientTransport(new URL(mcpUrl), {
       requestInit: { headers: { authorization: `Bearer ${accessToken}` } },
     }),
   );
   const { tools } = await client.listTools();
-  return { client, tools, ui };
+  return { client, tools, ui, ...(broker ? { elicitation: broker } : {}) };
 }
 
 /** The parts of a tool result beyond its text, which an MCP Apps view needs. */
@@ -68,6 +82,8 @@ export interface ToolCallTrace {
   ui?: { resourceUri: string };
   /** Who made the call: the brain, or a view through the host. Default `brain`. */
   origin?: "brain" | "view";
+  /** Questions the server asked the person during this call, and their answers. */
+  elicitations?: ElicitationRecord[];
 }
 
 export async function callTool(
@@ -76,8 +92,10 @@ export async function callTool(
   args: Record<string, unknown>,
   origin: "brain" | "view" = "brain",
 ): Promise<ToolCallTrace> {
+  session.elicitation?.drain();
   const started = Date.now();
   const result = await session.client.callTool({ name, arguments: args });
+  const asked = session.elicitation?.drain() ?? [];
   const content = (result.content as Array<{ type: string; text?: string }> | undefined) ?? [];
   const text = content
     .filter((c) => c.type === "text")
@@ -101,5 +119,6 @@ export async function callTool(
     },
     ...(resourceUri ? { ui: { resourceUri } } : {}),
     origin,
+    ...(asked.length ? { elicitations: asked } : {}),
   };
 }
